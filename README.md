@@ -2,7 +2,7 @@
 
 OS: Ubuntu 22.04
 
-Python module lists used by mk_xml.py
+Python module lists used by drg2uptime.py
 
 standard libraries: datetime, collections, sys
 
