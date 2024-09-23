@@ -5,6 +5,7 @@
 # 2023-07-07 update2 (calculating LST, adding xtick/ytick-right/left of rcParams and ProgressBar)
 # 2023-09-24 update3 (add sckedule list)
 # 2024-03-07
+# 2024-09-23
 
 import os
 import sys
@@ -14,9 +15,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from astropy import units as u
-from astropy.coordinates import SkyCoord
-from astropy.coordinates import EarthLocation
-from astropy.coordinates import AltAz
+from astropy.coordinates import SkyCoord, EarthLocation, AltAz, get_sun
 from astropy.time import Time
 
 plt.rcParams["xtick.direction"]     = "in"       
@@ -36,27 +35,38 @@ plt.rcParams["grid.color"]          = "lightgray"
 plt.rcParams["axes.labelsize"]      = 12
 plt.rcParams["font.size"]           = 12
 
-def RaDec2AltAz(object_ra: float, object_dec: float, observation_time: float, delta_time: float, latitude: float, longitude: float, height: float) -> float :
+def RaDec2AltAz_LST_Sun(object_ra: float, object_dec: float, observation_time: float, delta_time: float, latitude: float, longitude: float, height: float) -> float :
+    
+    delta_time_sample = 0
+    if 10 <= delta_time < 100 :
+        delta_time_sample = int(delta_time / 10)
+    elif 100 <= delta_time < 1000 :
+        delta_time_sample = int(delta_time / 20)
+    else :
+        delta_time_sample = int(delta_time / 100)
+    
     
     # calculating AZ-EL
     location_geocentrice = EarthLocation.from_geocentric(latitude, longitude, height, unit=u.m)
     location_geodetic    = EarthLocation.to_geodetic(location_geocentrice)
     location_lon_lat     = EarthLocation(lon=location_geodetic.lon, lat=location_geodetic.lat, height=location_geodetic.height)
-    delta_time           = np.linspace(0, delta_time, int(delta_time) + 1) * u.second
+    
+    delta_time           = np.linspace(0, delta_time, delta_time_sample +1) * u.second
     obstime              = Time(observation_time, scale="utc") + delta_time
     object_ra_dec        = SkyCoord(ra=object_ra * u.deg, dec=object_dec * u.deg)
-    AltAz_coord          = AltAz(location=location_lon_lat, obstime=obstime)
-    object_altaz         = object_ra_dec.transform_to(AltAz_coord)
+    AltAz_coord_azel     = AltAz(location=location_lon_lat, obstime=obstime)
+    object_altaz         = object_ra_dec.transform_to(AltAz_coord_azel)
 
     # calculating LST
-    one_day_minutes      = np.linspace(0, 24, 24*60) * u.hour
+    one_day_hour         = np.linspace(0, 24, 24*10) * u.hour
     object_ra_dec        = SkyCoord(ra=object_ra * u.deg, dec=object_dec * u.deg)
-    obstime_lst          = Time(observation_time, scale="utc" ,location=location_lon_lat) + one_day_minutes
-    AltAz_coord          = AltAz(location=location_lon_lat, obstime=obstime_lst)
-    lst_altaz            = object_ra_dec.transform_to(AltAz_coord)
+    obstime_lst          = Time(observation_time, scale="utc" ,location=location_lon_lat) + one_day_hour
+    AltAz_coord_lst      = AltAz(location=location_lon_lat, obstime=obstime_lst)
+    lst_altaz            = object_ra_dec.transform_to(AltAz_coord_lst)
     lst                  = obstime_lst.sidereal_time('apparent')
     
-    return obstime.datetime, object_altaz.az.deg, object_altaz.alt.deg, lst.hour, lst_altaz.az.deg, lst_altaz.alt.deg
+    
+    return obstime.datetime, object_altaz.az.deg, object_altaz.alt.deg, lst.hour, lst_altaz.az.deg, lst_altaz.alt.deg, obstime, AltAz_coord_azel
 
 def target_RaDec_rectime(drg) :
     
@@ -122,7 +132,7 @@ for i, target in enumerate(target_ra_dec_out.keys()) :
         target_rectime_start, target_length = target_rectime_length.split()
 
         # Az & EL
-        target_datetime, target_az, target_el, target_lst, _, _ = RaDec2AltAz(float(target_ra), float(target_dec), target_rectime_start, float(target_length), antenna_position_x, antenna_position_y, antenna_position_z)
+        target_datetime, target_az, target_el, target_lst, _, _, _, _ = RaDec2AltAz_LST_Sun(float(target_ra), float(target_dec), target_rectime_start, float(target_length), antenna_position_x, antenna_position_y, antenna_position_z)
 
         axs_azel[0].plot(target_datetime, target_az, label=f"{target}" if label_check == False else "", color=rgb) # az
         axs_azel[1].plot(target_datetime, target_el, label=f"{target}" if label_check == False else "", color=rgb) # el
@@ -132,7 +142,7 @@ for i, target in enumerate(target_ra_dec_out.keys()) :
         label_check = True
     
     # LST
-    _, _, _, target_lst, target_lst_az, target_lst_el = RaDec2AltAz(float(target_ra), float(target_dec), "2023-01-01", 0, antenna_position_x, antenna_position_y, antenna_position_z)
+    _, _, _, target_lst, target_lst_az, target_lst_el, sun_one_day_hour, sun_coordinate = RaDec2AltAz_LST_Sun(float(target_ra), float(target_dec), observation_start_date, (Time(observation_end_date)-Time(observation_start_date)).datetime.total_seconds(), antenna_position_x, antenna_position_y, antenna_position_z)
     
     target_lst_az_el_zip = list(map(list, zip(target_lst, target_lst_az, target_lst_el)))
     target_lst_az_el_zip.sort()
@@ -140,6 +150,11 @@ for i, target in enumerate(target_ra_dec_out.keys()) :
     
     axs_lst[0].plot(target_lst_az_el_zip[:,0], target_lst_az_el_zip[:,1], label=f"{target}", color=rgb) # az
     axs_lst[1].plot(target_lst_az_el_zip[:,0], target_lst_az_el_zip[:,2], label=f"{target}", color=rgb) # el
+    
+# sun
+sun = get_sun(sun_one_day_hour).transform_to(sun_coordinate)
+axs_azel[0].plot(sun_one_day_hour.datetime, sun.az, label="sun", color="k") # sun az
+axs_azel[1].plot(sun_one_day_hour.datetime, sun.alt, label="sun", color="k") # sun el
 
 
 formatter = mdates.DateFormatter("%H:%M")
